@@ -1,18 +1,27 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Camera, Upload, Wand2, Trash2, Layout, ImagePlus, CheckCircle2, AlertCircle, Download } from 'lucide-react';
+import { Loader2, Camera, Upload, Wand2, Trash2, Layout, ImagePlus, CheckCircle2, AlertCircle, Download, X } from 'lucide-react';
 import { MONTHS } from '@/lib/constants';
 import BaseStyleSelector from './BaseStyleSelector';
 import { BaseStyleImage } from '@/lib/models/BaseStyleImage';
+import { useUploadImageProcessor } from '@/hooks/useImageProcessor';
+
+interface MonthData {
+  name: string;
+  editPrompt: string;
+  baseImage: string | null;
+  resultImage: string | null;
+  status: 'idle' | 'processing' | 'completed' | 'error';
+}
 
 const WrappedPoster = () => {
-  const [monthsData, setMonthsData] = useState(
+  const [monthsData, setMonthsData] = useState<MonthData[]>(
       MONTHS.map(name => ({ 
         name, 
         editPrompt: "", 
         baseImage: null, 
         resultImage: null, 
-        status: 'idle' 
+        status: 'idle' as const
       }))
     );
     
@@ -21,11 +30,98 @@ const WrappedPoster = () => {
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const posterRef = useRef(null);
+  const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const posterRef = useRef(null); // Used for html2canvas
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { processImage, isProcessing, error, clearError, revokePreviewUrl } = useUploadImageProcessor();
 
   const handleBaseStyleSelect = (id: string | null, baseStyle: BaseStyleImage | null) => {
     setSelectedBaseStyleId(id);
     setSelectedBaseStyle(baseStyle);
+  };
+
+  // Cleanup preview URLs on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(previewUrls).forEach((url) => {
+        if (url && url.startsWith('blob:')) {
+          revokePreviewUrl(url);
+        }
+      });
+    };
+  }, []);
+
+  // Handle image upload
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || selectedMonth === null) {
+      return;
+    }
+
+    // Clear previous error
+    clearError();
+    setUploadError(null);
+
+    try {
+      // Process the image (validates, converts to base64, creates preview)
+      const result = await processImage(file);
+
+      // Update monthsData with the base64 data URI
+      const newData = [...monthsData];
+      newData[selectedMonth].baseImage = result.dataUrl;
+
+      // Clean up old preview URL if it exists
+      if (previewUrls[selectedMonth] && previewUrls[selectedMonth].startsWith('blob:')) {
+        revokePreviewUrl(previewUrls[selectedMonth]);
+      }
+
+      // Store preview URL for cleanup
+      setPreviewUrls((prev) => ({
+        ...prev,
+        [selectedMonth]: result.previewUrl,
+      }));
+
+      setMonthsData(newData);
+
+      // Clear the file input so the same file can be selected again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (err) {
+      // Error is already set by the hook, but we'll also set a user-friendly message
+      const errorMessage = error?.message || 'Failed to upload image. Please try again.';
+      setUploadError(errorMessage);
+    }
+  };
+
+  // Handle image removal
+  const handleImageRemove = () => {
+    if (selectedMonth === null) return;
+
+    // Clean up preview URL
+    if (previewUrls[selectedMonth] && previewUrls[selectedMonth].startsWith('blob:')) {
+      revokePreviewUrl(previewUrls[selectedMonth]);
+    }
+
+    // Update state
+    const newData = [...monthsData];
+    newData[selectedMonth].baseImage = null;
+    setMonthsData(newData);
+
+    setPreviewUrls((prev) => {
+      const newUrls = { ...prev };
+      delete newUrls[selectedMonth];
+      return newUrls;
+    });
+
+    setUploadError(null);
+    clearError();
+
+    // Clear file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   return (
@@ -160,18 +256,59 @@ const WrappedPoster = () => {
                   </label>
                   <div className="aspect-video bg-slate-950 rounded-xl border border-slate-800 relative group overflow-hidden">
                     {monthsData[selectedMonth].baseImage ? (
-                      <img src={monthsData[selectedMonth].baseImage} className="w-full h-full object-cover" alt="Preview" />
-                    ) : (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600">
-                         <Camera className="w-6 h-6 mb-1" />
-                         <span className="text-[10px]">Tap to upload</span>
+                      <div className="relative w-full h-full">
+                        <img 
+                          src={monthsData[selectedMonth].baseImage!} 
+                          className="w-full h-full object-cover" 
+                          alt="Preview" 
+                        />
+                        {isProcessing && (
+                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                            <Loader2 className="w-6 h-6 text-white animate-spin" />
+                          </div>
+                        )}
+                        <button
+                          onClick={handleImageRemove}
+                          className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 rounded-full transition-colors text-white cursor-pointer z-10"
+                          aria-label="Remove image"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
                       </div>
+                    ) : (
+                      <label className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 cursor-pointer group">
+                        {isProcessing ? (
+                          <>
+                            <Loader2 className="w-6 h-6 mb-1 animate-spin" />
+                            <span className="text-[10px]">Processing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Camera className="w-6 h-6 mb-1" />
+                            <span className="text-[10px]">Tap to upload</span>
+                          </>
+                        )}
+                        {/* Upload overlay - only shows when no image exists */}
+                        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-black/60 flex items-center justify-center transition-opacity pointer-events-none">
+                          <Upload className="w-5 h-5 text-white" />
+                        </div>
+                        <input 
+                          ref={fileInputRef}
+                          type="file" 
+                          className="hidden" 
+                          onChange={handleImageUpload} 
+                          accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
+                          disabled={isProcessing}
+                        />
+                      </label>
                     )}
-                    <label className="absolute inset-0 cursor-pointer opacity-0 group-hover:opacity-100 bg-black/60 flex items-center justify-center transition-opacity">
-                      <Upload className="w-5 h-5 text-white" />
-                      <input type="file" className="hidden" onChange={(e) => {}} accept="image/*" />
-                    </label>
                   </div>
+                  {(error || uploadError) && (
+                    <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                      <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                      <span className="text-xs text-red-300">{error?.message || uploadError}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
