@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Camera, Upload, Wand2, Trash2, Layout, ImagePlus, CheckCircle2, AlertCircle, Download } from 'lucide-react';
 import { MONTHS } from '@/lib/constants';
+import BaseStyleSelector from './BaseStyleSelector';
+import { BaseStyleImage } from '@/lib/models/BaseStyleImage';
 
 const WrappedPoster = () => {
   const [monthsData, setMonthsData] = useState(
@@ -14,11 +16,17 @@ const WrappedPoster = () => {
       }))
     );
     
-  const [styleImage, setStyleImage] = useState(null); // TODO: Add avatar selection, carousell: selected avatar image is the reference style image
+  const [selectedBaseStyleId, setSelectedBaseStyleId] = useState<string | null>(null);
+  const [selectedBaseStyle, setSelectedBaseStyle] = useState<BaseStyleImage | null>(null);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const posterRef = useRef(null);
+
+  const handleBaseStyleSelect = (id: string | null, baseStyle: BaseStyleImage | null) => {
+    setSelectedBaseStyleId(id);
+    setSelectedBaseStyle(baseStyle);
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-slate-100 p-4 md:p-6 font-sans">
@@ -38,7 +46,10 @@ const WrappedPoster = () => {
           <section className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl space-y-4">
             <div className="space-y-3">
               <h2 className="text-[10px] font-bold uppercase tracking-widest text-indigo-400">Select An Avatar</h2>
-              {/* TODO: Add avatar selection, carousell */}
+              <BaseStyleSelector
+                selectedId={selectedBaseStyleId}
+                onSelect={handleBaseStyleSelect}
+              />
             </div>
 
             <div className="flex gap-2">
