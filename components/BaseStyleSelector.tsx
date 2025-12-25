@@ -197,15 +197,6 @@ const BaseStyleSelector: React.FC<BaseStyleSelectorProps> = ({ selectedId, onSel
           })}
         </div>
       </div>
-
-      {/* Selected Style Name */}
-      {selectedId && (
-        <div className="mt-3 text-center">
-          <span className="text-xs text-slate-400">
-            {baseStyles.find(s => s._id?.toString() === selectedId)?.name || 'Selected'}
-          </span>
-        </div>
-      )}
     </div>
   );
 };
