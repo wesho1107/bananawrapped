@@ -14,10 +14,9 @@ const WrappedPoster = () => {
       }))
     );
     
-  const [styleReference, setStyleReference] = useState("");
-  const [styleImage, setStyleImage] = useState(null);
+  const [styleImage, setStyleImage] = useState(null); // TODO: Add avatar selection, carousell: selected avatar image is the reference style image
   const [isProcessingAll, setIsProcessingAll] = useState(false);
-  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const posterRef = useRef(null);
 
@@ -86,7 +85,7 @@ const WrappedPoster = () => {
               {monthsData.map((month, idx) => (
                 <div 
                   key={idx}
-                  onClick={() => {}}
+                  onClick={() => setSelectedMonth(idx)}
                   className={`group relative aspect-square rounded-lg overflow-hidden cursor-pointer transition-all border 
                     ${month.resultImage ? 'border-transparent shadow-sm' : 'border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100'}`}
                 >
@@ -145,7 +144,9 @@ const WrappedPoster = () => {
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">1. Upload Base Image</label>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    1. Upload Image of the Month
+                  </label>
                   <div className="aspect-video bg-slate-950 rounded-xl border border-slate-800 relative group overflow-hidden">
                     {monthsData[selectedMonth].baseImage ? (
                       <img src={monthsData[selectedMonth].baseImage} className="w-full h-full object-cover" alt="Preview" />
@@ -163,7 +164,9 @@ const WrappedPoster = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">2. Scene Modifications</label>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    2. Describe Highlight of the Month
+                  </label>
                   <textarea
                     value={monthsData[selectedMonth].editPrompt}
                     onChange={(e) => {
@@ -172,7 +175,7 @@ const WrappedPoster = () => {
                       setMonthsData(newData);
                     }}
                     className="w-full min-h-[80px] bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm focus:ring-1 focus:ring-indigo-500 outline-none resize-none"
-                    placeholder="Describe changes (e.g. wearing a hat, add a pet...)"
+                    placeholder="Describe highlights of the month (e.g. a trip to the beach, a new job, a birthday...)"
                   />
                 </div>
               </div>
