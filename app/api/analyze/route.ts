@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 - Activities/context
 - Key objects or elements
 
-Write me a concise, actionable 20-words image-editing prompt to edit a base style image to incorporate these characteristics. The prompt should be specific and suitable for image editing.
+Write me a concise, actionable 20-words image-editing prompt to edit a base style image to incorporate these characteristics onto a character in an image. The prompt should be instructive and specific for editing a character in an image, it should not add new characters to the image.
 
 Format your response as JSON with this structure:
 {
@@ -75,7 +75,7 @@ Format your response as JSON with this structure:
 
     // Prepare content for Gemini
     // Using gemini-1.5-flash for fast multimodal analysis
-    const model = google('gemini-1.5-flash');
+    const model = google('gemini-flash-latest');
     
     // Build the prompt content based on input type
     let promptMessages: Array<{ role: 'user'; content: Array<{ type: 'text'; text: string } | { type: 'image'; image: string; mediaType: string }> }>;

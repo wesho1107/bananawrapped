@@ -73,6 +73,11 @@ export async function POST(request: NextRequest) {
     // Use gemini-2.5-flash-image for image editing (Nano Banana)
     const model = google('gemini-2.5-flash-image');
 
+    const editMessage = `Act as a character editor. Given the following base style image and its character, edit the character and render a square 120px by 120px image with the same character and style as the base style image.
+    
+    Edit the character in the provided base style image with the following: ${prompt}
+    `;
+
     // Build the prompt for image editing
     const promptMessages = [
       {
@@ -81,7 +86,7 @@ export async function POST(request: NextRequest) {
             // editing prompt
           {
             type: 'text' as const,
-            text: prompt,
+            text: editMessage,
           },
             // base style image
           {
