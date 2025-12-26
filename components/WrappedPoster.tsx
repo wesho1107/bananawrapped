@@ -32,6 +32,7 @@ const WrappedPoster = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const posterRef = useRef(null); // Used for html2canvas
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { processImage, isProcessing, error, clearError, revokePreviewUrl } = useUploadImageProcessor();
@@ -121,6 +122,105 @@ const WrappedPoster = () => {
     // Clear file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  // Handle "Apply & Render" - connects to analysis → generation pipeline
+  const handleApplyAndRender = async () => {
+    if (selectedMonth === null) return;
+
+    const monthData = monthsData[selectedMonth];
+    
+    // Validate inputs
+    if (!monthData.baseImage && !monthData.editPrompt.trim()) {
+      setGenerationError('Please upload an image or enter a description');
+      return;
+    }
+
+    if (!selectedBaseStyle || !selectedBaseStyle.imageUrl) {
+      setGenerationError('Please select a base style avatar');
+      return;
+    }
+
+    // Clear previous errors
+    setGenerationError(null);
+    clearError();
+
+    // Update status to processing
+    const newData = [...monthsData];
+    newData[selectedMonth].status = 'processing';
+    setMonthsData(newData);
+
+    try {
+      // Step 1: Analyze user input (image or text) to generate prompt
+      // If we have an image, analyze it; otherwise use the text prompt
+      const analyzeResponse = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: monthData.baseImage ? 'image' : 'text',
+          content: monthData.baseImage || monthData.editPrompt.trim(),
+        }),
+      });
+
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json().catch(() => ({ error: 'Analysis failed' }));
+        throw new Error(errorData.error || 'Failed to analyze input');
+      }
+
+      const analyzeResult = await analyzeResponse.json();
+      const generatedPrompt = analyzeResult.prompt;
+
+      if (!generatedPrompt) {
+        throw new Error('No prompt generated from analysis');
+      }
+
+      console.log('generatedPrompt', generatedPrompt);
+
+      // Step 2: Generate edited image using the base style and generated prompt
+      const generateResponse = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          baseImageUrl: selectedBaseStyle.imageUrl,
+          prompt: generatedPrompt,
+        }),
+      });
+
+      if (!generateResponse.ok) {
+        const errorData = await generateResponse.json().catch(() => ({ error: 'Generation failed' }));
+        throw new Error(errorData.error || 'Failed to generate image');
+      }
+
+      const generateResult = await generateResponse.json();
+      const resultImageUrl = generateResult.imageUrl;
+
+      if (!resultImageUrl) {
+        throw new Error('No image was generated');
+      }
+
+      console.log('resultImageUrl', resultImageUrl);
+
+      // Step 3: Update the month data with the result
+      const updatedData = [...monthsData];
+      updatedData[selectedMonth].resultImage = resultImageUrl;
+      updatedData[selectedMonth].editPrompt = generatedPrompt; // Store the generated prompt
+      updatedData[selectedMonth].status = 'completed';
+      setMonthsData(updatedData);
+
+    } catch (err) {
+      // Handle errors
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate image';
+      setGenerationError(errorMessage);
+      
+      // Update status to error
+      const errorData = [...monthsData];
+      errorData[selectedMonth].status = 'error';
+      setMonthsData(errorData);
     }
   };
 
@@ -328,20 +428,39 @@ const WrappedPoster = () => {
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-2">
-                <button
-                  onClick={()=>{}}
-                  disabled={!monthsData[selectedMonth].baseImage}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-900/40"
-                >
-                  Apply & Render
-                </button>
-                <button
-                  onClick={() => setSelectedMonth(null)}
-                  className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-sm transition-all"
-                >
-                  Cancel
-                </button>
+              <div className="space-y-2">
+                {generationError && (
+                  <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                    <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                    <span className="text-xs text-red-300">{generationError}</span>
+                  </div>
+                )}
+                
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={handleApplyAndRender}
+                    disabled={(!monthsData[selectedMonth].baseImage && !monthsData[selectedMonth].editPrompt.trim()) || monthsData[selectedMonth].status === 'processing' || !selectedBaseStyle}
+                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2"
+                  >
+                    {monthsData[selectedMonth].status === 'processing' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      'Apply & Render'
+                    )}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedMonth(null);
+                      setGenerationError(null);
+                    }}
+                    className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-sm transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           </div>
