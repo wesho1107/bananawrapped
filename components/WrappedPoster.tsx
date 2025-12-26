@@ -1,10 +1,15 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Camera, Upload, Wand2, Trash2, Layout, ImagePlus, CheckCircle2, AlertCircle, Download, X } from 'lucide-react';
+import { Loader2, Camera, Upload, Wand2, ImagePlus, AlertCircle, Download, X } from 'lucide-react';
 import { MONTHS } from '@/lib/constants';
 import BaseStyleSelector from './BaseStyleSelector';
 import { BaseStyleImage } from '@/lib/models/BaseStyleImage';
 import { useUploadImageProcessor } from '@/hooks/useImageProcessor';
+import {
+  processMonthGeneration,
+  processBatchGeneration,
+  type MonthGenerationData,
+} from '@/lib/services/calendarService';
 
 interface MonthData {
   name: string;
@@ -33,6 +38,7 @@ const WrappedPoster = () => {
   const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number; current: number | null }>({ completed: 0, total: 0, current: null });
   const posterRef = useRef(null); // Used for html2canvas
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { processImage, isProcessing, error, clearError, revokePreviewUrl } = useUploadImageProcessor();
@@ -152,63 +158,22 @@ const WrappedPoster = () => {
     setMonthsData(newData);
 
     try {
-      // Step 1: Analyze user input (image or text) to generate prompt
-      // If we have an image, analyze it; otherwise use the text prompt
-      const analyzeResponse = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: monthData.baseImage ? 'image' : 'text',
-          content: monthData.baseImage || monthData.editPrompt.trim(),
-        }),
+      // Process the month generation pipeline using the calendar service
+      const monthGenerationData: MonthGenerationData = {
+        baseImage: monthData.baseImage,
+        editPrompt: monthData.editPrompt,
+        name: monthData.name,
+      };
+
+      const result = await processMonthGeneration({
+        monthData: monthGenerationData,
+        baseStyleImageUrl: selectedBaseStyle.imageUrl,
       });
 
-      if (!analyzeResponse.ok) {
-        const errorData = await analyzeResponse.json().catch(() => ({ error: 'Analysis failed' }));
-        throw new Error(errorData.error || 'Failed to analyze input');
-      }
-
-      const analyzeResult = await analyzeResponse.json();
-      const generatedPrompt = analyzeResult.prompt;
-
-      if (!generatedPrompt) {
-        throw new Error('No prompt generated from analysis');
-      }
-
-      console.log('generatedPrompt', generatedPrompt);
-
-      // Step 2: Generate edited image using the base style and generated prompt
-      const generateResponse = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          baseImageUrl: selectedBaseStyle.imageUrl,
-          prompt: generatedPrompt,
-        }),
-      });
-
-      if (!generateResponse.ok) {
-        const errorData = await generateResponse.json().catch(() => ({ error: 'Generation failed' }));
-        throw new Error(errorData.error || 'Failed to generate image');
-      }
-
-      const generateResult = await generateResponse.json();
-      const resultImageUrl = generateResult.imageUrl;
-
-      if (!resultImageUrl) {
-        throw new Error('No image was generated');
-      }
-
-      console.log('resultImageUrl', resultImageUrl);
-
-      // Step 3: Update the month data with the result
+      // Update the month data with the result
       const updatedData = [...monthsData];
-      updatedData[selectedMonth].resultImage = resultImageUrl;
-      updatedData[selectedMonth].editPrompt = generatedPrompt; // Store the generated prompt
+      updatedData[selectedMonth].resultImage = result.resultImageUrl;
+      updatedData[selectedMonth].editPrompt = result.generatedPrompt;
       updatedData[selectedMonth].status = 'completed';
       setMonthsData(updatedData);
 
@@ -222,6 +187,83 @@ const WrappedPoster = () => {
       errorData[selectedMonth].status = 'error';
       setMonthsData(errorData);
     }
+  };
+
+  // Handle batch generation for all months
+  const handleGenerateAll = async () => {
+    if (!selectedBaseStyle || !selectedBaseStyle.imageUrl) {
+      setGenerationError('Please select a base style avatar');
+      return;
+    }
+
+    // Find all months that have either baseImage or editPrompt
+    const monthsToProcess = monthsData
+      .map((month, index) => ({ month, index }))
+      .filter(({ month }) => month.baseImage || month.editPrompt.trim());
+
+    if (monthsToProcess.length === 0) {
+      setGenerationError('Please add images or descriptions for at least one month');
+      return;
+    }
+
+    // Clear previous errors
+    setGenerationError(null);
+    clearError();
+
+    // Initialize batch progress
+    setIsProcessingAll(true);
+    setBatchProgress({ completed: 0, total: monthsToProcess.length, current: null });
+
+    // Prepare month data for the service
+    const monthGenerationData: Array<{
+      data: MonthGenerationData;
+      index: number;
+    }> = monthsToProcess.map(({ month, index }) => ({
+      data: {
+        baseImage: month.baseImage,
+        editPrompt: month.editPrompt,
+        name: month.name,
+      },
+      index,
+    }));
+
+    // Use the calendar service for batch processing
+    const batchResult = await processBatchGeneration({
+      months: monthGenerationData,
+      baseStyleImageUrl: selectedBaseStyle.imageUrl,
+      onProgress: (progress) => {
+        setBatchProgress(progress);
+
+        // Update status for the current month being processed
+        if (progress.current !== null) {
+          const newData = [...monthsData];
+          newData[progress.current].status = 'processing';
+          setMonthsData(newData);
+        }
+      },
+    });
+
+    // Process results and update state
+    for (const { index, result, error } of batchResult.results) {
+      const updatedData = [...monthsData];
+
+      if (result) {
+        // Success - update with result
+        updatedData[index].resultImage = result.resultImageUrl;
+        updatedData[index].editPrompt = result.generatedPrompt;
+        updatedData[index].status = 'completed';
+      } else if (error) {
+        // Error - mark as error
+        updatedData[index].status = 'error';
+        console.error(`Error processing ${monthsData[index].name}:`, error.message);
+      }
+
+      setMonthsData(updatedData);
+    }
+
+    // Batch processing complete
+    setIsProcessingAll(false);
+    setBatchProgress({ completed: 0, total: 0, current: null });
   };
 
   return (
@@ -250,12 +292,25 @@ const WrappedPoster = () => {
 
             <div className="flex gap-2">
               <button
-                onClick={()=>{}}
-                disabled={isProcessingAll}
-                className="flex-1 w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+                onClick={handleGenerateAll}
+                disabled={isProcessingAll || !selectedBaseStyle}
+                className="flex-1 w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
               >
-                {isProcessingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                Generate All
+                {isProcessingAll ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {batchProgress.total > 0 ? (
+                      <span>{batchProgress.completed}/{batchProgress.total}</span>
+                    ) : (
+                      <span>Generating...</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4" />
+                    Generate All
+                  </>
+                )}
               </button>
               
               <button
@@ -315,6 +370,12 @@ const WrappedPoster = () => {
                   {month.status === 'processing' && (
                     <div className="absolute inset-0 bg-indigo-900/40 flex items-center justify-center">
                       <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    </div>
+                  )}
+                  
+                  {month.status === 'error' && (
+                    <div className="absolute inset-0 bg-red-900/40 flex items-center justify-center">
+                      <AlertCircle className="w-4 h-4 text-red-300" />
                     </div>
                   )}
                   
