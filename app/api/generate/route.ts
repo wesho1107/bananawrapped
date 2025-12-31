@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateImage } from '@/lib/core/generate';
+import { rateLimitMiddleware, getRateLimitHeaders } from '@/lib/middleware/rateLimit';
 
 interface GenerateRequest {
   baseImageUrl: string; // base64 data URI
@@ -12,6 +13,12 @@ interface GenerateResponse {
 
 // POST - Generate edited image using Nano Banana
 export async function POST(request: NextRequest) {
+  const { rateLimitResponse, rateLimitResult } = await rateLimitMiddleware(request);
+  // rateLimitResponse is null if successful
+  if (rateLimitResponse) {
+    return rateLimitResponse;
+  }
+
   try {
     const body: GenerateRequest = await request.json();
     const { baseImageUrl, prompt } = body;
@@ -20,7 +27,10 @@ export async function POST(request: NextRequest) {
     if (!baseImageUrl || !prompt) {
       return NextResponse.json(
         { error: 'baseImageUrl and prompt are required' },
-        { status: 400 }
+        {
+          status: 400,
+          headers: getRateLimitHeaders(rateLimitResult),
+        }
       );
     }
 
@@ -31,7 +41,10 @@ export async function POST(request: NextRequest) {
           error:
             'baseImageUrl must be a base64 data URI (e.g., data:image/jpeg;base64,...)',
         },
-        { status: 400 }
+        {
+          status: 400,
+          headers: getRateLimitHeaders(rateLimitResult),
+        }
       );
     }
 
@@ -39,7 +52,10 @@ export async function POST(request: NextRequest) {
     if (!prompt.trim()) {
       return NextResponse.json(
         { error: 'prompt cannot be empty' },
-        { status: 400 }
+        {
+          status: 400,
+          headers: getRateLimitHeaders(rateLimitResult),
+        }
       );
     }
 
@@ -50,7 +66,9 @@ export async function POST(request: NextRequest) {
       imageUrl,
     };
 
-    return NextResponse.json(response);
+    return NextResponse.json(response, {
+      headers: getRateLimitHeaders(rateLimitResult),
+    });
   } catch (error) {
     console.error('Error generating image:', error);
 
@@ -59,19 +77,28 @@ export async function POST(request: NextRequest) {
       if (error.message.includes('data URI')) {
         return NextResponse.json(
           { error: `Invalid image format: ${error.message}` },
-          { status: 400 }
+          {
+            status: 400,
+            headers: getRateLimitHeaders(rateLimitResult),
+          }
         );
       }
 
       return NextResponse.json(
         { error: `Image generation failed: ${error.message}` },
-        { status: 500 }
+        {
+          status: 500,
+          headers: getRateLimitHeaders(rateLimitResult),
+        }
       );
     }
 
     return NextResponse.json(
       { error: 'Failed to generate image' },
-      { status: 500 }
+      {
+        status: 500,
+        headers: getRateLimitHeaders(rateLimitResult),
+      }
     );
   }
 }
