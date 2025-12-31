@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Camera, Upload, Wand2, ImagePlus, AlertCircle, Download, X } from 'lucide-react';
+import html2canvas from 'html2canvas-pro';
 import { MONTHS } from '@/lib/constants';
 import BaseStyleSelector from './BaseStyleSelector';
 import { BaseStyleImage } from '@/lib/models/BaseStyleImage';
@@ -189,6 +190,58 @@ const WrappedPoster = () => {
     }
   };
 
+  const handleExport = async () => {
+    if (!posterRef.current) {
+      setGenerationError('Cannot export: poster element not found');
+      return;
+    }
+
+    setIsExporting(true);
+    setGenerationError(null);
+
+    try {
+      const canvas = await html2canvas(posterRef.current, {
+        backgroundColor: '#ffffff',
+        scale: 2, // Higher quality export
+        useCORS: true, // Handle cross-origin images
+        logging: false, // Disable console logging
+        allowTaint: false, // Prevent tainting canvas with cross-origin images
+      });
+
+      // Convert canvas to blob
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          setGenerationError('Failed to generate export blob');
+          setIsExporting(false);
+          return;
+        }
+
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        
+        // Generate filename with timestamp
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        link.download = `banana-wrapped-2025-${timestamp}.png`;
+        
+        // Trigger download
+        document.body.appendChild(link);
+        link.click();
+        
+        // Cleanup
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        setIsExporting(false);
+      }, 'image/png', 1.0);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to export calendar';
+      setGenerationError(errorMessage);
+      setIsExporting(false);
+    }
+  };
+
   // Handle batch generation for all months
   const handleGenerateAll = async () => {
     if (!selectedBaseStyle || !selectedBaseStyle.imageUrl) {
@@ -314,10 +367,11 @@ const WrappedPoster = () => {
               </button>
               
               <button
-                onClick={()=>{}}
+                onClick={handleExport}
                 disabled={isExporting}
-                className="flex-none p-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 rounded-xl flex items-center justify-center transition-all shadow-lg h-auto"
+                className="flex-none p-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl flex items-center justify-center transition-all shadow-lg h-auto"
                 style={{minWidth: 0}}
+                title="Export calendar as PNG"
               >
                 {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
               </button>
@@ -329,7 +383,7 @@ const WrappedPoster = () => {
         <div className="flex-1 flex flex-col items-center justify-center">
           <div 
             ref={posterRef}
-            className="bg-white aspect-[9/16] w-full max-w-[420px] shadow-2xl rounded-[1.5rem] overflow-hidden flex flex-col border-[10px] border-slate-900"
+            className="bg-white aspect-[9/16] w-full max-w-[420px] shadow-2xl rounded-[1.5rem] overflow-hidden flex flex-col"
             style={{ backgroundImage: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}
           >
             {/* Poster Header */}
