@@ -1,21 +1,22 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Camera, Upload, Wand2, ImagePlus, AlertCircle, Download, X } from 'lucide-react';
+import { Loader2, Camera, Upload, Wand2, ImagePlus, AlertCircle, Download, X, Check } from 'lucide-react';
 import html2canvas from 'html2canvas-pro';
 import { MONTHS } from '@/lib/constants';
 import BaseStyleSelector from './BaseStyleSelector';
 import { BaseStyleImage } from '@/lib/models/BaseStyleImage';
 import { useUploadImageProcessor } from '@/hooks/useImageProcessor';
 import {
-  processMonthGeneration,
   processBatchGeneration,
   type MonthGenerationData,
 } from '@/lib/services/calendarService';
 
 interface MonthData {
   name: string;
-  editPrompt: string;
-  baseImage: string | null;
+  inputType: 'image' | 'text' | null;
+  userInput: string; // Original user text input
+  baseImage: string | null; // User uploaded image
+  generatedPrompt: string; // AI-generated prompt (read-only)
   resultImage: string | null;
   status: 'idle' | 'processing' | 'completed' | 'error';
 }
@@ -23,9 +24,11 @@ interface MonthData {
 const WrappedPoster = () => {
   const [monthsData, setMonthsData] = useState<MonthData[]>(
       MONTHS.map(name => ({ 
-        name, 
-        editPrompt: "", 
-        baseImage: null, 
+        name,
+        inputType: null,
+        userInput: "",
+        baseImage: null,
+        generatedPrompt: "",
         resultImage: null, 
         status: 'idle' as const
       }))
@@ -78,6 +81,9 @@ const WrappedPoster = () => {
       // Update monthsData with the base64 data URI
       const newData = [...monthsData];
       newData[selectedMonth].baseImage = result.dataUrl;
+      newData[selectedMonth].inputType = 'image';
+      // Clear text input when image is uploaded
+      newData[selectedMonth].userInput = '';
 
       // Clean up old preview URL if it exists
       if (previewUrls[selectedMonth] && previewUrls[selectedMonth].startsWith('blob:')) {
@@ -115,6 +121,7 @@ const WrappedPoster = () => {
     // Update state
     const newData = [...monthsData];
     newData[selectedMonth].baseImage = null;
+    newData[selectedMonth].inputType = null;
     setMonthsData(newData);
 
     setPreviewUrls((prev) => {
@@ -132,63 +139,54 @@ const WrappedPoster = () => {
     }
   };
 
-  // Handle "Apply & Render" - connects to analysis → generation pipeline
-  const handleApplyAndRender = async () => {
+  // Handle input type change
+  const handleInputTypeChange = (type: 'image' | 'text' | null) => {
     if (selectedMonth === null) return;
+    
+    const newData = [...monthsData];
+    newData[selectedMonth].inputType = type;
+    
+    // Clear the other input type's data when switching
+    if (type === 'image') {
+      newData[selectedMonth].userInput = '';
+    } else if (type === 'text') {
+      newData[selectedMonth].baseImage = null;
+      // Clean up preview URL if exists
+      if (previewUrls[selectedMonth] && previewUrls[selectedMonth].startsWith('blob:')) {
+        revokePreviewUrl(previewUrls[selectedMonth]);
+      }
+      setPreviewUrls((prev) => {
+        const newUrls = { ...prev };
+        delete newUrls[selectedMonth];
+        return newUrls;
+      });
+    }
+    
+    setMonthsData(newData);
+  };
 
+  // Handle save (replaces Apply & Render)
+  const handleSave = () => {
+    if (selectedMonth === null) return;
+    
     const monthData = monthsData[selectedMonth];
     
-    // Validate inputs
-    if (!monthData.baseImage && !monthData.editPrompt.trim()) {
+    // Validate that content exists
+    if (!monthData.baseImage && !monthData.userInput.trim()) {
       setGenerationError('Please upload an image or enter a description');
       return;
     }
-
-    if (!selectedBaseStyle || !selectedBaseStyle.imageUrl) {
-      setGenerationError('Please select a base style avatar');
-      return;
-    }
-
-    // Clear previous errors
+    
+    // Close modal
+    setSelectedMonth(null);
     setGenerationError(null);
+    setUploadError(null);
     clearError();
-
-    // Update status to processing
-    const newData = [...monthsData];
-    newData[selectedMonth].status = 'processing';
-    setMonthsData(newData);
-
-    try {
-      // Process the month generation pipeline using the calendar service
-      const monthGenerationData: MonthGenerationData = {
-        baseImage: monthData.baseImage,
-        editPrompt: monthData.editPrompt,
-        name: monthData.name,
-      };
-
-      const result = await processMonthGeneration({
-        monthData: monthGenerationData,
-        baseStyleImageUrl: selectedBaseStyle.imageUrl,
-      });
-
-      // Update the month data with the result
-      const updatedData = [...monthsData];
-      updatedData[selectedMonth].resultImage = result.resultImageUrl;
-      updatedData[selectedMonth].editPrompt = result.generatedPrompt;
-      updatedData[selectedMonth].status = 'completed';
-      setMonthsData(updatedData);
-
-    } catch (err) {
-      // Handle errors
-      const errorMessage = err instanceof Error ? err.message : 'Failed to generate image';
-      setGenerationError(errorMessage);
-      
-      // Update status to error
-      const errorData = [...monthsData];
-      errorData[selectedMonth].status = 'error';
-      setMonthsData(errorData);
-    }
   };
+
+  // Check if all months have content
+  const allMonthsReady = monthsData.every(month => month.baseImage || month.userInput.trim());
+  const readyCount = monthsData.filter(month => month.baseImage || month.userInput.trim()).length;
 
   const handleExport = async () => {
     if (!posterRef.current) {
@@ -243,19 +241,15 @@ const WrappedPoster = () => {
   };
 
   // Handle batch generation for all months
-  const handleGenerateAll = async () => {
+  const handleGenerateCalendar = async () => {
     if (!selectedBaseStyle || !selectedBaseStyle.imageUrl) {
       setGenerationError('Please select a base style avatar');
       return;
     }
 
-    // Find all months that have either baseImage or editPrompt
-    const monthsToProcess = monthsData
-      .map((month, index) => ({ month, index }))
-      .filter(({ month }) => month.baseImage || month.editPrompt.trim());
-
-    if (monthsToProcess.length === 0) {
-      setGenerationError('Please add images or descriptions for at least one month');
+    // Validate all 12 months have content
+    if (!allMonthsReady) {
+      setGenerationError(`Please add content for all 12 months (${readyCount}/12 ready)`);
       return;
     }
 
@@ -265,16 +259,17 @@ const WrappedPoster = () => {
 
     // Initialize batch progress
     setIsProcessingAll(true);
-    setBatchProgress({ completed: 0, total: monthsToProcess.length, current: null });
+    setBatchProgress({ completed: 0, total: 12, current: null });
 
-    // Prepare month data for the service
+    // Prepare month data for the service - process all 12 months
     const monthGenerationData: Array<{
       data: MonthGenerationData;
       index: number;
-    }> = monthsToProcess.map(({ month, index }) => ({
+    }> = monthsData.map((month, index) => ({
       data: {
         baseImage: month.baseImage,
-        editPrompt: month.editPrompt,
+        userInput: month.userInput,
+        editPrompt: month.userInput, // This field is kept for backward compatibility but userInput is used
         name: month.name,
       },
       index,
@@ -301,9 +296,9 @@ const WrappedPoster = () => {
       const updatedData = [...monthsData];
 
       if (result) {
-        // Success - update with result
+        // Success - update with result, preserve userInput
         updatedData[index].resultImage = result.resultImageUrl;
-        updatedData[index].editPrompt = result.generatedPrompt;
+        updatedData[index].generatedPrompt = result.generatedPrompt;
         updatedData[index].status = 'completed';
       } else if (error) {
         // Error - mark as error
@@ -343,17 +338,22 @@ const WrappedPoster = () => {
               />
             </div>
 
-            <div className="flex gap-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span>Progress</span>
+                <span className="font-bold">{readyCount}/12 months ready</span>
+              </div>
+              
               <button
-                onClick={handleGenerateAll}
-                disabled={isProcessingAll || !selectedBaseStyle}
-                className="flex-1 w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+                onClick={handleGenerateCalendar}
+                disabled={isProcessingAll || !selectedBaseStyle || !allMonthsReady}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
               >
                 {isProcessingAll ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     {batchProgress.total > 0 ? (
-                      <span>{batchProgress.completed}/{batchProgress.total}</span>
+                      <span>Generating {batchProgress.completed}/{batchProgress.total}</span>
                     ) : (
                       <span>Generating...</span>
                     )}
@@ -361,7 +361,7 @@ const WrappedPoster = () => {
                 ) : (
                   <>
                     <Wand2 className="w-4 h-4" />
-                    Generate All
+                    Generate Calendar
                   </>
                 )}
               </button>
@@ -369,11 +369,11 @@ const WrappedPoster = () => {
               <button
                 onClick={handleExport}
                 disabled={isExporting}
-                className="flex-none p-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl flex items-center justify-center transition-all shadow-lg h-auto"
-                style={{minWidth: 0}}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:cursor-not-allowed rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
                 title="Export calendar as PNG"
               >
                 {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>Export Calendar</span>
               </button>
             </div>
           </section>
@@ -398,46 +398,78 @@ const WrappedPoster = () => {
 
             {/* 3x4 Grid */}
             <div className="flex-1 px-4 grid grid-cols-3 grid-rows-4 gap-2 pb-6">
-              {monthsData.map((month, idx) => (
-                <div 
-                  key={idx}
-                  onClick={() => setSelectedMonth(idx)}
-                  className={`group relative aspect-square rounded-lg overflow-hidden cursor-pointer transition-all border 
-                    ${month.resultImage ? 'border-transparent shadow-sm' : 'border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100'}`}
-                >
-                  {month.resultImage ? (
-                    <img src={month.resultImage} className="w-full h-full object-cover" alt={month.name} crossOrigin="anonymous" />
-                  ) : month.baseImage ? (
-                    <div className="relative w-full h-full">
-                      <img src={month.baseImage} className="w-full h-full object-cover opacity-30 grayscale" alt="Base" crossOrigin="anonymous" />
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <Wand2 className="w-4 h-4 text-slate-300" />
+              {monthsData.map((month, idx) => {
+                const hasContent = month.baseImage || month.userInput.trim();
+                const isGenerated = !!month.resultImage;
+                const isEmpty = !hasContent && !isGenerated;
+                
+                return (
+                  <div 
+                    key={idx}
+                    onClick={() => !isProcessingAll && setSelectedMonth(idx)}
+                    className={`group relative aspect-square rounded-lg overflow-hidden transition-all border 
+                      ${isGenerated 
+                        ? 'border-transparent shadow-sm cursor-pointer' 
+                        : hasContent 
+                          ? 'border-solid border-green-500/50 bg-slate-50 hover:bg-slate-100 cursor-pointer' 
+                          : 'border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 cursor-pointer'
+                      }
+                      ${isProcessingAll ? 'cursor-not-allowed opacity-60' : ''}
+                    `}
+                  >
+                    {month.resultImage ? (
+                      <>
+                        <img src={month.resultImage} className="w-full h-full object-cover" alt={month.name} crossOrigin="anonymous" />
+                      </>
+                    ) : month.baseImage ? (
+                      <div className="relative w-full h-full">
+                        <img src={month.baseImage} className="w-full h-full object-cover opacity-30 grayscale" alt="Base" crossOrigin="anonymous" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <Wand2 className="w-4 h-4 text-slate-300" />
+                        </div>
+                        {/* Ready badge */}
+                        <div className="absolute top-1 right-1 bg-green-500/90 text-white px-1.5 py-0.5 rounded text-[6px] font-bold uppercase flex items-center gap-0.5">
+                          <Check className="w-2.5 h-2.5" />
+                          <span>Ready</span>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
-                      <ImagePlus className="w-4 h-4 mb-0.5 opacity-20" />
-                      <span className="text-[7px] font-bold uppercase tracking-widest">{month.name}</span>
-                    </div>
-                  )}
+                    ) : hasContent ? (
+                      <div className="relative w-full h-full">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
+                          <ImagePlus className="w-4 h-4 mb-0.5 opacity-20" />
+                          <span className="text-[7px] font-bold uppercase tracking-widest">{month.name}</span>
+                        </div>
+                        {/* Ready badge */}
+                        <div className="absolute top-1 right-1 bg-green-500/90 text-white px-1.5 py-0.5 rounded text-[6px] font-bold uppercase flex items-center gap-0.5">
+                          <Check className="w-2.5 h-2.5" />
+                          <span>Ready</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
+                        <ImagePlus className="w-4 h-4 mb-0.5 opacity-20" />
+                        <span className="text-[7px] font-bold uppercase tracking-widest">{month.name}</span>
+                      </div>
+                    )}
 
-                  {month.status === 'processing' && (
-                    <div className="absolute inset-0 bg-indigo-900/40 flex items-center justify-center">
-                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    {month.status === 'processing' && (
+                      <div className="absolute inset-0 bg-indigo-900/40 flex items-center justify-center z-10">
+                        <Loader2 className="w-4 h-4 text-white animate-spin" />
+                      </div>
+                    )}
+                    
+                    {month.status === 'error' && (
+                      <div className="absolute inset-0 bg-red-900/40 flex items-center justify-center z-10">
+                        <AlertCircle className="w-4 h-4 text-red-300" />
+                      </div>
+                    )}
+                    
+                    <div className="absolute bottom-1 left-1 flex justify-between items-center pointer-events-none w-full pr-2">
+                      <span className="text-[7px] font-black text-slate-900/40 uppercase truncate bg-white/60 px-1 rounded-sm">{month.name}</span>
                     </div>
-                  )}
-                  
-                  {month.status === 'error' && (
-                    <div className="absolute inset-0 bg-red-900/40 flex items-center justify-center">
-                      <AlertCircle className="w-4 h-4 text-red-300" />
-                    </div>
-                  )}
-                  
-                  <div className="absolute bottom-1 left-1 flex justify-between items-center pointer-events-none w-full pr-2">
-                    <span className="text-[7px] font-black text-slate-900/40 uppercase truncate bg-white/60 px-1 rounded-sm">{month.name}</span>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Footer */}
@@ -454,7 +486,7 @@ const WrappedPoster = () => {
       {/* Editor Modal */}
       {selectedMonth !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
             <div className="p-6 space-y-5">
               <div className="flex justify-between items-center">
                 <div className="space-y-0.5">
@@ -464,84 +496,135 @@ const WrappedPoster = () => {
                 <button onClick={() => setSelectedMonth(null)} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400">✕</button>
               </div>
 
-              <div className="space-y-4">
+              {/* Preview Section - Show if resultImage exists */}
+              {monthsData[selectedMonth].resultImage && (
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase">
-                    1. Upload Image of the Month
+                    Generated Preview
                   </label>
-                  <div className="aspect-video bg-slate-950 rounded-xl border border-slate-800 relative group overflow-hidden">
-                    {monthsData[selectedMonth].baseImage ? (
-                      <div className="relative w-full h-full">
-                        <img 
-                          src={monthsData[selectedMonth].baseImage!} 
-                          className="w-full h-full object-cover" 
-                          alt="Preview" 
-                        />
-                        {isProcessing && (
-                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                            <Loader2 className="w-6 h-6 text-white animate-spin" />
-                          </div>
-                        )}
-                        <button
-                          onClick={handleImageRemove}
-                          className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 rounded-full transition-colors text-white cursor-pointer z-10"
-                          aria-label="Remove image"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ) : (
-                      <label className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 cursor-pointer group">
-                        {isProcessing ? (
-                          <>
-                            <Loader2 className="w-6 h-6 mb-1 animate-spin" />
-                            <span className="text-[10px]">Processing...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Camera className="w-6 h-6 mb-1" />
-                            <span className="text-[10px]">Tap to upload</span>
-                          </>
-                        )}
-                        {/* Upload overlay - only shows when no image exists */}
-                        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-black/60 flex items-center justify-center transition-opacity pointer-events-none">
-                          <Upload className="w-5 h-5 text-white" />
-                        </div>
-                        <input 
-                          ref={fileInputRef}
-                          type="file" 
-                          className="hidden" 
-                          onChange={handleImageUpload} 
-                          accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
-                          disabled={isProcessing}
-                        />
-                      </label>
-                    )}
+                  <div className="aspect-video bg-slate-950 rounded-xl border border-slate-800 relative overflow-hidden">
+                    <img 
+                      src={monthsData[selectedMonth].resultImage!} 
+                      className="w-full h-full object-cover" 
+                      alt="Generated preview" 
+                    />
                   </div>
-                  {(error || uploadError) && (
-                    <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-800 rounded-lg">
-                      <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                      <span className="text-xs text-red-300">{error?.message || uploadError}</span>
+                </div>
+              )}
+
+              {/* Generated Prompt Display - Show if generatedPrompt exists */}
+              {monthsData[selectedMonth].generatedPrompt && (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    Generated Prompt (for reference)
+                  </label>
+                  <div className="w-full min-h-[60px] bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-300">
+                    {monthsData[selectedMonth].generatedPrompt}
+                  </div>
+                </div>
+              )}
+
+              {/* Input Section - Show if no resultImage or editing */}
+              {!monthsData[selectedMonth].resultImage && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">
+                      Select Input Type
+                    </label>
+                    <select
+                      value={monthsData[selectedMonth].inputType || ''}
+                      onChange={(e) => handleInputTypeChange(e.target.value as 'image' | 'text' | null)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                    >
+                      <option value="">Select input type...</option>
+                      <option value="image">Image Upload</option>
+                      <option value="text">Text Description</option>
+                    </select>
+                  </div>
+
+                  {/* Conditional Input UI */}
+                  {monthsData[selectedMonth].inputType === 'image' && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        Upload Image of the Month
+                      </label>
+                      <div className="aspect-video bg-slate-950 rounded-xl border border-slate-800 relative group overflow-hidden">
+                        {monthsData[selectedMonth].baseImage ? (
+                          <div className="relative w-full h-full">
+                            <img 
+                              src={monthsData[selectedMonth].baseImage!} 
+                              className="w-full h-full object-cover" 
+                              alt="Preview" 
+                            />
+                            {isProcessing && (
+                              <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                                <Loader2 className="w-6 h-6 text-white animate-spin" />
+                              </div>
+                            )}
+                            <button
+                              onClick={handleImageRemove}
+                              className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 rounded-full transition-colors text-white cursor-pointer z-10"
+                              aria-label="Remove image"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 cursor-pointer group">
+                            {isProcessing ? (
+                              <>
+                                <Loader2 className="w-6 h-6 mb-1 animate-spin" />
+                                <span className="text-[10px]">Processing...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-6 h-6 mb-1" />
+                                <span className="text-[10px]">Tap to upload</span>
+                              </>
+                            )}
+                            {/* Upload overlay - only shows when no image exists */}
+                            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-black/60 flex items-center justify-center transition-opacity pointer-events-none">
+                              <Upload className="w-5 h-5 text-white" />
+                            </div>
+                            <input 
+                              ref={fileInputRef}
+                              type="file" 
+                              className="hidden" 
+                              onChange={handleImageUpload} 
+                              accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
+                              disabled={isProcessing}
+                            />
+                          </label>
+                        )}
+                      </div>
+                      {(error || uploadError) && (
+                        <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                          <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                          <span className="text-xs text-red-300">{error?.message || uploadError}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {monthsData[selectedMonth].inputType === 'text' && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        Describe Highlight of the Month
+                      </label>
+                      <textarea
+                        value={monthsData[selectedMonth].userInput}
+                        onChange={(e) => {
+                          const newData = [...monthsData];
+                          newData[selectedMonth].userInput = e.target.value;
+                          setMonthsData(newData);
+                        }}
+                        className="w-full min-h-[80px] bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm focus:ring-1 focus:ring-indigo-500 outline-none resize-none"
+                        placeholder="Describe highlights of the month (e.g. a trip to the beach, a new job, a birthday...)"
+                      />
                     </div>
                   )}
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">
-                    2. Describe Highlight of the Month
-                  </label>
-                  <textarea
-                    value={monthsData[selectedMonth].editPrompt}
-                    onChange={(e) => {
-                      const newData = [...monthsData];
-                      newData[selectedMonth].editPrompt = e.target.value;
-                      setMonthsData(newData);
-                    }}
-                    className="w-full min-h-[80px] bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm focus:ring-1 focus:ring-indigo-500 outline-none resize-none"
-                    placeholder="Describe highlights of the month (e.g. a trip to the beach, a new job, a birthday...)"
-                  />
-                </div>
-              </div>
+              )}
 
               <div className="space-y-2">
                 {generationError && (
@@ -553,23 +636,18 @@ const WrappedPoster = () => {
                 
                 <div className="flex gap-2 pt-2">
                   <button
-                    onClick={handleApplyAndRender}
-                    disabled={(!monthsData[selectedMonth].baseImage && !monthsData[selectedMonth].editPrompt.trim()) || monthsData[selectedMonth].status === 'processing' || !selectedBaseStyle}
+                    onClick={handleSave}
+                    disabled={(!monthsData[selectedMonth].baseImage && !monthsData[selectedMonth].userInput.trim())}
                     className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2"
                   >
-                    {monthsData[selectedMonth].status === 'processing' ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      'Apply & Render'
-                    )}
+                    Save
                   </button>
                   <button
                     onClick={() => {
                       setSelectedMonth(null);
                       setGenerationError(null);
+                      setUploadError(null);
+                      clearError();
                     }}
                     className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-sm transition-all"
                   >

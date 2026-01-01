@@ -1,6 +1,7 @@
 export interface MonthGenerationData {
   baseImage: string | null;
-  editPrompt: string;
+  userInput: string; // Original user text input
+  editPrompt: string; // This will be used for the actual prompt (can be userInput or generated from image)
   name: string;
 }
 
@@ -88,9 +89,10 @@ export async function processMonthGeneration(
   const { monthData, baseStyleImageUrl } = params;
 
   // Step 1: Analyze user input to generate prompt
+  // Use baseImage if available, otherwise use userInput (text)
   const generatedPrompt = await analyzeInputClient({
     type: monthData.baseImage ? 'image' : 'text',
-    content: monthData.baseImage || monthData.editPrompt.trim(),
+    content: monthData.baseImage || monthData.userInput.trim(),
   });
 
   // Step 2: Generate edited image using base style and prompt
